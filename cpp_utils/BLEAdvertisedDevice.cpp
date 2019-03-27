@@ -13,14 +13,16 @@
  */
 #include "sdkconfig.h"
 #if defined(CONFIG_BT_ENABLED)
-#include <esp_log.h>
 #include <sstream>
 #include "BLEAdvertisedDevice.h"
 #include "BLEUtils.h"
-#ifdef ARDUINO_ARCH_ESP32
+#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
-#endif
+#define LOG_TAG ""
+#else
+#include "esp_log.h"
 static const char* LOG_TAG="BLEAdvertisedDevice";
+#endif
 
 BLEAdvertisedDevice::BLEAdvertisedDevice() {
 	m_adFlag           = 0;
@@ -228,16 +230,17 @@ bool BLEAdvertisedDevice::haveTXPower() {
  *
  * https://www.bluetooth.com/specifications/assigned-numbers/generic-access-profile
  */
-void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
+void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload, size_t total_len) {
 	uint8_t length;
 	uint8_t ad_type;
 	uint8_t sizeConsumed = 0;
 	bool finished = false;
-	setPayload(payload);
+	m_payload = payload;
+	m_payloadLength = total_len;
 
+	while(!finished) {
 		length = *payload;          // Retrieve the length of the record.
 		payload++;                  // Skip to type
-	while (!finished) {
 		sizeConsumed += 1 + length; // increase the size consumed.
 
 		if (length != 0) { // A length of 0 indicates that we have reached the end.
@@ -250,7 +253,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
 					ad_type, BLEUtils::advTypeToString(ad_type), length, pHex);
 			free(pHex);
 
-			switch (ad_type) {
+			switch(ad_type) {
 				case ESP_BLE_AD_TYPE_NAME_CMPL: {   // Adv Data Type: 0x09
 					setName(std::string(reinterpret_cast<char*>(payload), length));
 					break;
@@ -273,7 +276,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
 
 				case ESP_BLE_AD_TYPE_16SRV_CMPL:
 				case ESP_BLE_AD_TYPE_16SRV_PART: {   // Adv Data Type: 0x02
-					for (int var = 0; var < length / 2; ++var) {
+					for (int var = 0; var < length/2; ++var) {
 						setServiceUUID(BLEUUID(*reinterpret_cast<uint16_t*>(payload + var * 2)));
 					}
 					break;
@@ -281,7 +284,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
 
 				case ESP_BLE_AD_TYPE_32SRV_CMPL:
 				case ESP_BLE_AD_TYPE_32SRV_PART: {   // Adv Data Type: 0x04
-					for (int var = 0; var < length / 4; ++var) {
+					for (int var = 0; var < length/4; ++var) {
 						setServiceUUID(BLEUUID(*reinterpret_cast<uint32_t*>(payload + var * 4)));
 					}
 					break;
@@ -308,7 +311,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
 						ESP_LOGE(LOG_TAG, "Length too small for ESP_BLE_AD_TYPE_SERVICE_DATA");
 						break;
 					}
-					uint16_t uuid = *(uint16_t*) payload;
+					uint16_t uuid = *(uint16_t*)payload;
 					setServiceDataUUID(BLEUUID(uuid));
 					if (length > 2) {
 						setServiceData(std::string(reinterpret_cast<char*>(payload + 2), length - 2));
@@ -335,7 +338,7 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
 						break;
 					}
 
-					setServiceDataUUID(BLEUUID(payload, (size_t) 16, false));
+					setServiceDataUUID(BLEUUID(payload, (size_t)16, false));
 					if (length > 16) {
 						setServiceData(std::string(reinterpret_cast<char*>(payload + 16), length - 16));
 					}
@@ -351,9 +354,9 @@ void BLEAdvertisedDevice::parseAdvertisement(uint8_t* payload) {
 		} // Length <> 0
 
 
-		if (sizeConsumed >= 31 || length == 0) {
+		if (sizeConsumed >= total_len)
 			finished = true;
-		}
+
 	} // !finished
 } // parseAdvertisement
 
@@ -510,9 +513,20 @@ uint8_t* BLEAdvertisedDevice::getPayload() {
 	return m_payload;
 }
 
-void BLEAdvertisedDevice::setPayload(uint8_t* payload) {
-	m_payload = payload;
+esp_ble_addr_type_t BLEAdvertisedDevice::getAddressType() {
+	return m_addressType;
 }
 
+void BLEAdvertisedDevice::setAddressType(esp_ble_addr_type_t type) {
+	m_addressType = type;
+}
+
+size_t BLEAdvertisedDevice::getPayloadLength() {
+	return m_payloadLength;
+}
+
+void BLEAdvertisedDeviceCallbacks::onResult(BLEAdvertisedDevice dev) {}
+void BLEAdvertisedDeviceCallbacks::onResult(BLEAdvertisedDevice* dev) {}
 
 #endif /* CONFIG_BT_ENABLED */
+

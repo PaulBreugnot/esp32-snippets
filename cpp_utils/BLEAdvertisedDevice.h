@@ -40,6 +40,9 @@ public:
 	BLEUUID     getServiceUUID();
 	int8_t      getTXPower();
 	uint8_t* 	getPayload();
+	size_t		getPayloadLength();
+	esp_ble_addr_type_t getAddressType();
+	void setAddressType(esp_ble_addr_type_t type);
 
 
 	bool		isAdvertisingService(BLEUUID uuid);
@@ -56,7 +59,7 @@ public:
 private:
 	friend class BLEScan;
 
-	void parseAdvertisement(uint8_t* payload);
+	void parseAdvertisement(uint8_t* payload, size_t total_len=62);
 	void setAddress(BLEAddress address);
 	void setAdFlag(uint8_t adFlag);
 	void setAdvertizementResult(uint8_t* payload);
@@ -70,7 +73,6 @@ private:
 	void setServiceUUID(const char* serviceUUID);
 	void setServiceUUID(BLEUUID serviceUUID);
 	void setTXPower(int8_t txPower);
-	void setPayload(uint8_t* payload);
 
 	bool m_haveAppearance;
 	bool m_haveManufacturerData;
@@ -81,6 +83,7 @@ private:
 	bool m_haveTXPower;
 
 
+	BLEAddress  m_address = BLEAddress((uint8_t*)"\0\0\0\0\0\0");
 	uint8_t     m_adFlag;
 	uint16_t    m_appearance;
 	int         m_deviceType;
@@ -92,8 +95,9 @@ private:
 	int8_t      m_txPower;
 	std::string m_serviceData;
 	BLEUUID     m_serviceDataUUID;
-	uint8_t*	m_payload;
-	BLEAddress  m_address = BLEAddress((uint8_t*) "\0\0\0\0\0\0");
+	uint8_t*	m_payload = nullptr;
+	size_t		m_payloadLength = 0;
+	esp_ble_addr_type_t m_addressType;
 };
 
 /**
@@ -112,7 +116,8 @@ public:
 	 * As we are scanning, we will find new devices.  When found, this call back is invoked with a reference to the
 	 * device that was found.  During any individual scan, a device will only be detected one time.
 	 */
-	virtual void onResult(BLEAdvertisedDevice advertisedDevice) = 0;
+	virtual void onResult(BLEAdvertisedDevice advertisedDevice);
+	virtual void onResult(BLEAdvertisedDevice* advertisedDevice);
 };
 
 #endif /* CONFIG_BT_ENABLED */

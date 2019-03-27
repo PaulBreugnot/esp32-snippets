@@ -11,13 +11,16 @@
 #include "BLERemoteService.h"
 #include "BLEUtils.h"
 #include "GeneralUtils.h"
-#include <esp_log.h>
 #include <esp_err.h>
-#ifdef ARDUINO_ARCH_ESP32
+#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
+#define LOG_TAG ""
+#else
+#include "esp_log.h"
+static const char* LOG_TAG = "BLERemoteService";
 #endif
 
-static const char* LOG_TAG = "BLERemoteService";
+
 
 BLERemoteService::BLERemoteService(
 		esp_gatt_id_t srvcId,
@@ -62,52 +65,6 @@ void BLERemoteService::gattClientEventHandler(
 	esp_gatt_if_t             gattc_if,
 	esp_ble_gattc_cb_param_t* evtParam) {
 	switch (event) {
-		//
-		// ESP_GATTC_GET_CHAR_EVT
-		//
-		// get_char:
-		// - esp_gatt_status_t    status
-		// - uin1t6_t             conn_id
-		// - esp_gatt_srvc_id_t   srvc_id
-		// - esp_gatt_id_t        char_id
-		// - esp_gatt_char_prop_t char_prop
-		//
-	/*
-		case ESP_GATTC_GET_CHAR_EVT: {
-			// Is this event for this service?  If yes, then the local srvc_id and the event srvc_id will be
-			// the same.
-			if (compareSrvcId(m_srvcId, evtParam->get_char.srvc_id) == false) {
-				break;
-			}
-
-			// If the status is NOT OK then we have a problem and continue.
-			if (evtParam->get_char.status != ESP_GATT_OK) {
-				m_semaphoreGetCharEvt.give();
-				break;
-			}
-
-			// This is an indication that we now have the characteristic details for a characteristic owned
-			// by this service so remember it.
-			m_characteristicMap.insert(std::pair<std::string, BLERemoteCharacteristic*>(
-					BLEUUID(evtParam->get_char.char_id.uuid).toString(),
-					new BLERemoteCharacteristic(evtParam->get_char.char_id, evtParam->get_char.char_prop, this)	));
-
-
-			// Now that we have received a characteristic, lets ask for the next one.
-			esp_err_t errRc = ::esp_ble_gattc_get_characteristic(
-					m_pClient->getGattcIf(),
-					m_pClient->getConnId(),
-					&m_srvcId,
-					&evtParam->get_char.char_id);
-			if (errRc != ESP_OK) {
-				ESP_LOGE(LOG_TAG, "esp_ble_gattc_get_characteristic: rc=%d %s", errRc, GeneralUtils::errorToString(errRc));
-				break;
-			}
-
-			//m_semaphoreGetCharEvt.give();
-			break;
-		} // ESP_GATTC_GET_CHAR_EVT
-*/
 		default:
 			break;
 	} // switch
@@ -126,10 +83,9 @@ void BLERemoteService::gattClientEventHandler(
  * @throws BLEUuidNotFoundException
  */
 BLERemoteCharacteristic* BLERemoteService::getCharacteristic(const char* uuid) {
-	return getCharacteristic(BLEUUID(uuid));
+    return getCharacteristic(BLEUUID(uuid));
 } // getCharacteristic
-
-
+	
 /**
  * @brief Get the characteristic object for the UUID.
  * @param [in] uuid Characteristic uuid.
@@ -152,7 +108,8 @@ BLERemoteCharacteristic* BLERemoteService::getCharacteristic(BLEUUID uuid) {
 			return myPair.second;
 		}
 	}
-	throw new BLEUuidNotFoundException();
+	// throw new BLEUuidNotFoundException();  // <-- we dont want exception here, which will cause app crash, we want to search if any characteristic can be found one after another
+	return nullptr;
 } // getCharacteristic
 
 
@@ -162,14 +119,14 @@ BLERemoteCharacteristic* BLERemoteService::getCharacteristic(BLEUUID uuid) {
  * @return N/A
  */
 void BLERemoteService::retrieveCharacteristics() {
-	ESP_LOGD(LOG_TAG, ">> getCharacteristics() for service: %s", getUUID().toString().c_str());
+	ESP_LOGD(LOG_TAG, ">> retrieveCharacteristics() for service: %s", getUUID().toString().c_str());
 
 	removeCharacteristics(); // Forget any previous characteristics.
 
 	uint16_t offset = 0;
 	esp_gattc_char_elem_t result;
 	while (true) {
-		uint16_t count = 1;
+		uint16_t count = 1;  // this value is used as in parameter that allows to search max 10 chars with the same uuid
 		esp_gatt_status_t status = ::esp_ble_gattc_get_all_char(
 			getClient()->getGattcIf(),
 			getClient()->getConnId(),
@@ -180,7 +137,7 @@ void BLERemoteService::retrieveCharacteristics() {
 			offset
 		);
 
-		if (status == ESP_GATT_INVALID_OFFSET) {   // We have reached the end of the entries.
+		if (status == ESP_GATT_INVALID_OFFSET || status == ESP_GATT_NOT_FOUND) {   // We have reached the end of the entries.
 			break;
 		}
 
@@ -209,8 +166,8 @@ void BLERemoteService::retrieveCharacteristics() {
 	} // Loop forever (until we break inside the loop).
 
 	m_haveCharacteristics = true; // Remember that we have received the characteristics.
-	ESP_LOGD(LOG_TAG, "<< getCharacteristics()");
-} // getCharacteristics
+	ESP_LOGD(LOG_TAG, "<< retrieveCharacteristics()");
+} // retrieveCharacteristics
 
 
 /**
@@ -230,11 +187,27 @@ std::map<std::string, BLERemoteCharacteristic*>* BLERemoteService::getCharacteri
 } // getCharacteristics
 
 /**
+ * @brief Retrieve a map of all the characteristics of this service.
+ * @return A map of all the characteristics of this service.
+ */
+std::map<uint16_t, BLERemoteCharacteristic*>* BLERemoteService::getCharacteristicsByHandle() {
+	ESP_LOGD(LOG_TAG, ">> getCharacteristicsByHandle() for service: %s", getUUID().toString().c_str());
+	// If is possible that we have not read the characteristics associated with the service so do that
+	// now.  The request to retrieve the characteristics by calling "retrieveCharacteristics" is a blocking
+	// call and does not return until all the characteristics are available.
+	if (!m_haveCharacteristics) {
+		retrieveCharacteristics();
+	}
+	ESP_LOGD(LOG_TAG, "<< getCharacteristicsByHandle() for service: %s", getUUID().toString().c_str());
+	return &m_characteristicMapByHandle;
+} // getCharacteristicsByHandle
+
+/**
  * @brief This function is designed to get characteristics map when we have multiple characteristics with the same UUID
  */
 void BLERemoteService::getCharacteristics(std::map<uint16_t, BLERemoteCharacteristic*>* pCharacteristicMap) {
 #pragma GCC diagnostic ignored "-Wunused-but-set-parameter"
-	pCharacteristicMap = &m_characteristicMapByHandle;
+	*pCharacteristicMap = m_characteristicMapByHandle;
 }  // Get the characteristics map.
 
 /**
@@ -292,10 +265,6 @@ std::string BLERemoteService::getValue(BLEUUID characteristicUuid) {
  * @return N/A.
  */
 void BLERemoteService::removeCharacteristics() {
-	for (auto &myPair : m_characteristicMap) {
-	   delete myPair.second;
-	   //m_characteristicMap.erase(myPair.first);  // Should be no need to delete as it will be deleted by the clear
-	}
 	m_characteristicMap.clear();   // Clear the map
 	for (auto &myPair : m_characteristicMapByHandle) {
 	   delete myPair.second;
